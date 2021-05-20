@@ -1,4 +1,10 @@
 # NodeClustering
- Methods for clustering nodes in an apollonian graph to enable distinction between regions
+ Methods for clustering nodes in an apollonian graph to enable distinction between image regions.
+ 
+ Intended for using the apollonian graph representation of a binary shape ([Apollonian](https://github.com/adrianfessel/Apollonian)) to generate training data for multilevel semantic segmentation using ([UNet](https://github.com/adrianfessel/UNet_Simplified)). The idea is to make use of the fact that different regions of a shape may correspond to differences in the local apollonian graph. This is the case in networks of the slime mold Physarum polycephalum (see below), where growth front regions are populated by giant, highly connected nodes, and where the network part is populated by small, evenly-sized nodes with restricted degree.
+ 
+ The method can compute a number of (local and non-local) features for each node. These features may depend on the properties of the node (e.g. radius), on its local embedding in the network (e.g. degree, clustering coefficient), on the gray values covered by the node and on features of the neighboring nodes. Further, non-local features like centralities can be used. Adding additional features is straighforward.
+ 
+ The method can be used to cluster single graphs/images, but it is more reliable if used on larger datasets. In the latter case, node features are collected for the entire dataset and the clustering is performed with regard to these features. This partitioning is then learned by a supervised model (svm) and can be used to make predictions for single images. This is the preferred method as in single images it cannot be guaranteed that the desired clusters are found, especially if the number of nodes belonging to each prospective cluster is very imbalanced. In particular, if in a sigle image one cluster is entiresly absent, the method would identify the desired number of clusters either way. However in this case, they may correpond to entirely different regions. Using the supervised method on top of clustering a larger dataset ensures that each node is assigned the correct cluster, even if not all of the specified clusters/regions are present in the image.
 
 ![example result](https://github.com/adrianfessel/NodeClustering/blob/main/clustering_result.png)
