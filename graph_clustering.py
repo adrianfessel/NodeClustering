@@ -20,6 +20,7 @@ from sklearn.cluster import KMeans
 from sklearn.impute import KNNImputer
 from sklearn.svm import SVC
 
+
 def r_neighbors(G, ID, r):
     """
     Function to obtain the IDs of all nodes that are separated by at most r 
@@ -45,7 +46,72 @@ def r_neighbors(G, ID, r):
     return [IDj for IDj in nx.single_source_shortest_path_length(G, ID, cutoff=r)]
 
 
-def get_voronoi_points(x, y, X, Y, size):
+def color_by_majority(G, cluster, r=1):
+    """
+    Update the cluster assignment of individual nodes based on the clusters
+    of its neighbors. The cluster that is present most frequent in the 
+    neighborhood ias assigned to the center node. The method is intended
+    for postprocessing of the clustering and has a smoothing effect.
+
+    Parameters
+    ----------
+    G : networkx graph
+        undirected graph
+    cluster : dict
+        cluster assignment, keyed by node ID
+    r : int, optional
+        maximum separation between source and target nodes; the default is 1
+
+    Returns
+    -------
+    cluster : dict
+        updated cluster assignment
+
+    """
+            
+    new_cluster = {}    
+            
+    for ID in G:
+        nbr_clusters = [cluster[nbr] for nbr in r_neighbors(G, ID, r)] + [cluster[ID]]
+        new_cluster[ID] = np.argmax(np.bincount(nbr_clusters))
+                
+    for ID in new_cluster:
+        cluster[ID] = new_cluster[ID]
+        
+    return cluster
+
+
+def sort_clusters_by_radius(features, labels):
+    """
+    Function to sort cluster indices by the average radius of nodes in the 
+    cluster (descending order). Returns indices.
+
+    Parameters
+    ----------
+    features : pandas dataframe
+        dataframe containing the features used for clustering
+    labels : numpy array
+        cluster assignment
+
+    Returns
+    -------
+    indices : list
+        cluster indices, sorted by radius (descending order)
+
+    """
+    
+    categories = np.unique(labels)
+    radii = np.asarray(features['radiusmean0'])
+    cluster_radius_mean = {}
+    
+    for category in categories:
+        inds = np.where(labels == category)
+        cluster_radius_mean[category] = np.mean(radii[inds])
+
+    return sorted(cluster_radius_mean, key=cluster_radius_mean.get, reverse=True)
+
+
+def get_voronoi_points(x, y, X, Y):
     """
     Function to compute the voronoi tesselation for the set of points (x, y),
     sampled only at the points (Y, X).
@@ -69,7 +135,7 @@ def get_voronoi_points(x, y, X, Y, size):
     """
     
     pos = np.asarray([[xi, yi] for xi, yi in zip(x, y)])
-    XY = np.c_[Y.ravel(), X.ravel()]
+    XY = np.c_[X.ravel(), Y.ravel()]
     
     Tree = spatial.cKDTree(pos)
     V = np.float32(Tree.query(XY)[1])
@@ -180,15 +246,16 @@ def features_single_frame(G, I, r=0):
         
     degree = {i:G.degree(i) for i in G}
     radius = {i:G.nodes[i]['r'] for i in G}
-    clustering = nx.clustering(G)
-    centrality = nx.betweenness_centrality(G)
-    gray = {i:I[G.nodes[i]['y'], G.nodes[i]['x']] for i in G}
+    # clustering = nx.clustering(G)
+    # centrality = nx.betweenness_centrality(G)
+    # gray = {i:I[G.nodes[i]['y'], G.nodes[i]['x']] for i in G}
     
-    measures = {'gray' : gray,
-                'degree' : degree,
+    measures = {
+                # 'gray' : gray,
+                # 'centrality' : centrality,
+                # 'clustering' : clustering,
                 'radius' : radius,
-                'clustering' : clustering,
-                'centrality' : centrality
+                'degree' : degree
                 }
     
     features = {}
@@ -251,17 +318,9 @@ def cluster_multiple_frames(PathsG, PathsI, r=0, n=2):
         cluster assignment
 
     """
-    
-    # construct feature names
-    
-    features = {}
-    for measure in ['radius', 'degree', 'radius', 'clustering', 'centrality']:
-        for method in ['mean', 'std', 'min', 'max']:
-            for ri in range(0, r+1):
-                features[measure+method+str(ri)] = []
-    
-    # read data, compute features
-    
+
+    features = pd.DataFrame()
+
     for PathG, PathI in zip(PathsG, PathsI):
     
         I = cv2.imread(PathI, cv2.IMREAD_GRAYSCALE)
@@ -272,65 +331,14 @@ def cluster_multiple_frames(PathsG, PathsI, r=0, n=2):
         
         G = pickle.load(open(PathG, 'rb'))
         
-        degree = {i:G.degree(i) for i in G}
-        radius = {i:G.nodes[i]['r'] for i in G}
-        clustering = nx.clustering(G)
-        centrality = nx.betweenness_centrality(G)
-        gray = {i:I[G.nodes[i]['y'], G.nodes[i]['x']] for i in G}
+        features_frame = features_single_frame(G, I, r=r)
         
-        measures = {'gray' : gray,
-                    'degree' : degree,
-                    'radius' : radius,
-                    'clustering' : clustering,
-                    'centrality' : centrality
-                    }
+        features = features.append(features_frame)
         
-        for ID in G:
-            
-            node_features = collect_neighbor_features(ID, G, measures=measures, r=r)
-            
-            for name in features:
-            
-                features[name].append(node_features[name])
-                
-    # perform clustering
-                
-    features = pd.DataFrame.from_dict(features, orient='columns')
-
     pipeline = make_pipeline(KNNImputer(), StandardScaler(), KMeans(n_clusters=n))
     labels = pipeline.fit_predict(features)
     
     return features, labels
-
-
-def sort_clusters_by_radius(features, labels):
-    """
-    Function to sort cluster indices by the average radius of nodes in the 
-    cluster (descending order). Returns indices.
-
-    Parameters
-    ----------
-    features : pandas dataframe
-        dataframe containing the features used for clustering
-    labels : numpy array
-        cluster assignment
-
-    Returns
-    -------
-    indices : list
-        cluster indices, sorted by radius (descending order)
-
-    """
-    
-    categories = np.unique(labels)
-    radii = np.asarray(features['radiusmean0'])
-    cluster_radius_mean = {}
-    
-    for category in categories:
-        inds = np.where(labels == category)
-        cluster_radius_mean[category] = np.mean(radii[inds])
-
-    return sorted(cluster_radius_mean, key=cluster_radius_mean.get, reverse=True)
 
 
 def svm_train(features, labels):
@@ -396,8 +404,11 @@ def plot_graph_clustering(G, C):
 if __name__ == '__main__':
     
     import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
     
     Path = './'
+    
+    ### single frame example
     
     I = cv2.imread(os.path.join(Path, 'grayscale.png'), cv2.IMREAD_GRAYSCALE)
     
@@ -410,8 +421,34 @@ if __name__ == '__main__':
     
     features = features_single_frame(G, I, r=3)
     C = cluster_single_frame(features, n=2)
-
-    plt.figure()
-    plt.imshow(I, cmap='gray')
     
+    C = color_by_majority(G, C, 2)
+
+    x, y = [G.nodes[i]['x'] for i in G], [G.nodes[i]['y'] for i in G]
+    Y, X = np.where(B)
+
+    V = get_voronoi_points(x, y, X, Y)
+    
+    Map = np.zeros(B.shape)
+    Map.fill(np.nan)
+    
+    for v, iX, iY in zip(V, X, Y):
+        Map[iY, iX] = v
+
+    V = {i:Map[G.nodes[i]['y'], G.nodes[i]['x']] for i in G}
+
+    for ID in G.nodes:
+        Map[Map==V[ID]] = C[ID]
+
+    plt.figure(figsize=2*plt.figaspect(1/1.618))
+    gs = gridspec.GridSpec(1, 2)
+    
+    plt.subplot(gs[0, 0])
+    plt.imshow(I, cmap='gray')
     plot_graph_clustering(G, C)
+    
+    plt.subplot(gs[0, 1])
+    plt.imshow(Map, cmap='RdBu_r')
+    plt.gca().invert_yaxis()
+    plt.axis('equal')
+    plt.axis('off')
